@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use bevy::{ecs::system::CommandQueue, prelude::*};
+use bevy::{ecs::world::CommandQueue, prelude::*};
 
 use super::{
     ctx::{DeleteCtx, WriteCtx},

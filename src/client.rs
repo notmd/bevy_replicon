@@ -5,7 +5,7 @@ pub mod server_entity_map;
 use std::{io::Cursor, mem};
 
 use bevy::{
-    ecs::{entity::EntityHashMap, system::CommandQueue},
+    ecs::{entity::EntityHashMap, world::CommandQueue},
     prelude::*,
 };
 use bincode::{DefaultOptions, Options};

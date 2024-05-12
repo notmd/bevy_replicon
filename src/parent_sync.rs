@@ -101,8 +101,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((RepliconCorePlugin, ParentSyncPlugin));
 
-        let child_entity = app.world.spawn_empty().id();
-        app.world.spawn_empty().add_child(child_entity);
+        let child_entity = app.world_mut().spawn_empty().id();
+        app.world_mut().spawn_empty().add_child(child_entity);
 
         app.add_systems(Update, move |mut commands: Commands| {
             // Should be inserted in `Update` to avoid sync in `PreUpdate`.
@@ -111,7 +111,7 @@ mod tests {
 
         app.update();
 
-        let child_entity = app.world.entity(child_entity);
+        let child_entity = app.world_mut().entity(child_entity);
         let parent = child_entity.get::<Parent>().unwrap();
         let parent_sync = child_entity.get::<ParentSync>().unwrap();
         assert!(parent_sync.0.is_some_and(|entity| entity == **parent));
