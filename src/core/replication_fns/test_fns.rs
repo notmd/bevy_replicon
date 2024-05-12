@@ -3,7 +3,7 @@ use std::io::Cursor;
 use bevy::{ecs::world::CommandQueue, prelude::*};
 
 use super::{
-    ctx::{DeleteCtx, WriteCtx},
+    ctx::{DespawnCtx, RemoveCtx, WriteCtx},
     FnsInfo,
 };
 use crate::{
@@ -11,8 +11,9 @@ use crate::{
     core::{
         command_markers::{CommandMarkers, EntityMarkers},
         replication_fns::{ctx::SerializeCtx, ReplicationFns},
+        replicon_tick::RepliconTick,
     },
-    server::replicon_tick::RepliconTick,
+    server::server_tick::ServerTick,
 };
 
 /**
@@ -29,14 +30,14 @@ use bevy::prelude::*;
 use bevy_replicon::{
     core::replication_fns::{rule_fns::RuleFns, test_fns::TestFnsEntityExt, ReplicationFns},
     prelude::*,
-    server::replicon_tick::RepliconTick,
+    server::server_tick::ServerTick,
 };
 use serde::{Deserialize, Serialize};
 
 let mut app = App::new();
 app.add_plugins((MinimalPlugins, RepliconPlugins));
 
-let replicon_tick = *app.world.resource::<RepliconTick>();
+let tick = **app.world.resource::<ServerTick>();
 
 // Register rule functions manually to obtain `FnsInfo`.
 let fns_info = app
@@ -49,13 +50,13 @@ let mut entity = app.world.spawn(DummyComponent);
 let data = entity.serialize(fns_info);
 entity.remove::<DummyComponent>();
 
-entity.apply_write(&data, fns_info, replicon_tick);
+entity.apply_write(&data, fns_info, tick);
 assert!(entity.contains::<DummyComponent>());
 
-entity.apply_remove(fns_info, replicon_tick);
+entity.apply_remove(fns_info, tick);
 assert!(!entity.contains::<DummyComponent>());
 
-entity.apply_despawn(replicon_tick);
+entity.apply_despawn(tick);
 assert!(app.world.entities().is_empty());
 
 #[derive(Component, Serialize, Deserialize)]
@@ -93,9 +94,9 @@ impl TestFnsEntityExt for EntityWorldMut<'_> {
     fn serialize(&mut self, fns_info: FnsInfo) -> Vec<u8> {
         let replication_fns = self.world().resource::<ReplicationFns>();
         let (component_fns, rule_fns) = replication_fns.get(fns_info.fns_id());
-        let replicon_tick = *self.world().resource::<RepliconTick>();
+        let server_tick = **self.world().resource::<ServerTick>();
         let mut cursor = Cursor::default();
-        let ctx = SerializeCtx { replicon_tick };
+        let ctx = SerializeCtx { server_tick };
         let ptr = self.get_by_id(fns_info.component_id()).unwrap_or_else(|| {
             let components = self.world().components();
             let component_name = components
@@ -164,18 +165,23 @@ impl TestFnsEntityExt for EntityWorldMut<'_> {
         let command_markers = self.world().resource::<CommandMarkers>();
         entity_markers.read(command_markers, &*self);
 
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, self.world());
-        let entity = commands.entity(self.id());
-
-        let replication_fns = self.world().resource::<ReplicationFns>();
-        let (component_fns, _) = replication_fns.get(fns_info.fns_id());
-        let ctx = DeleteCtx { message_tick };
-
-        component_fns.remove(&ctx, &entity_markers, entity);
-
+        let entity = self.id();
         self.world_scope(|world| {
-            queue.apply(world);
+            world.resource_scope(|world, replication_fns: Mut<ReplicationFns>| {
+                let world_cell = world.as_unsafe_world_cell();
+                // SAFETY: access is unique and used to obtain `EntityMut`, which is just a wrapper over `UnsafeEntityCell`.
+                let mut entity: EntityMut =
+                    unsafe { world_cell.world_mut().entity_mut(entity).into() };
+                let mut queue = CommandQueue::default();
+                let mut commands = Commands::new_from_entities(&mut queue, world_cell.entities());
+
+                let (component_fns, _) = replication_fns.get(fns_info.fns_id());
+                let mut ctx = RemoveCtx::new(&mut commands, message_tick);
+
+                component_fns.remove(&mut ctx, &entity_markers, &mut entity);
+
+                queue.apply(world);
+            })
         });
 
         self
@@ -183,7 +189,7 @@ impl TestFnsEntityExt for EntityWorldMut<'_> {
 
     fn apply_despawn(self, message_tick: RepliconTick) {
         let replication_fns = self.world().resource::<ReplicationFns>();
-        let ctx = DeleteCtx { message_tick };
+        let ctx = DespawnCtx { message_tick };
         (replication_fns.despawn)(&ctx, self);
     }
 }

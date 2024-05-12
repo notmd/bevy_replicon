@@ -10,16 +10,17 @@ use bytes::Bytes;
 use varint_rs::VarintWriter;
 
 use super::{
+    client_entity_map::ClientMapping,
     connected_clients::{ClientBuffers, ConnectedClients},
     replicon_server::RepliconServer,
-    replicon_tick::RepliconTick,
-    ClientMapping, ConnectedClient,
+    ConnectedClient,
 };
 use crate::core::{
     replication_fns::{
         component_fns::ComponentFns, ctx::SerializeCtx, rule_fns::UntypedRuleFns, FnsId,
     },
     replicon_channels::ReplicationChannel,
+    replicon_tick::RepliconTick,
 };
 
 /// Accumulates replication messages and sends them to clients.

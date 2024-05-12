@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2024-05-11
+
 ### Added
 
 - `AppMarkerExt` to customize how components will be written based on markers present without overriding deserialization functions. Now third-party prediction crates could be integrated much easier.
@@ -24,20 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SerializeFn` now accepts regular `C` instead of `Ptr`.
 - `DeserializeFn` now does only deserialization and returns `C`. Use the newly added marker-based API if you want to customize how component will be written. See docs for `AppMarkerExt` for details.
 - Rename `AppReplicationExt` into `AppRuleExt`.
-- `AppRuleExt::replicate_with` now no longer accepts `RemoveComponentFn`. Use the mentioned marker-based API to customize it instead.
-- `AppRuleExt::replicate_with` now additionally accepts `in_place_as_deserialize`. You can use it to customize deserialization if a component is already present or just pass `command_fns::deserialize_in_place` to make it fallback to the passed `deserialize`.
+- `AppRuleExt::replicate_with` now accepts `RuleFns` struct with functions. You no longer can customize removals this way, use the mentioned marker-based API instead.
 - Writing to entities on client now done via `EntityMut` and `Commands` instead of `EntityWorldMut`. It was needed to support the mentioned in-place deserialization and will possibly allow batching insertions in the future (for details see https://github.com/bevyengine/bevy/issues/10154).
-- Return iterator from `RepliconClient::receive` instead of popping the last message. If you used `while` loop for it before, replace it with `for`.
+- Return iterator from `RepliconClient::receive` instead of popping the last message. If you used `while` loop with it before, replace it with `for`.
 - Use new `ServerInitTick` resource on client instead of `RepliconTick`. If you used `ServerEventAppExt::add_server_event_with`, use `ServerInitTick` instead of `RepliconTick` in your receive function.
+- Use new `ServerTick` resource on server instead of `RepliconTick`.
+- Replace `ServerEntityTicks` with `Confirmed` component. The component now also stores whether the last 64 ticks were received.
+- Now serialization/deserialization, removal, despawn and writing functions accept context to access additional information.
 - Move `replicon_tick` module under `server` module since now it's used only on server.
 - Move `Replication` to `core` module.
 - Move all functions-related logic from `ReplicationRules` into a new `ReplicationFns` and hide `ReplicationRules` from public API.
+- Move `despawn_recursive` into `replication_fns` module.
 - Rename `serialize_component` into `default_serialize` and move into `rule_fns` module.
 - Rename `deserialize_component` into `default_deserialize` and move into `rule_fns` module.
 - Rename `deserialize_mapped_component` into `default_deserialize_mapped` and move into `rule_fns` module.
 - Rename `remove_component` into `default_remove` and move into `command_fns` module.
-- Now serialization/deserialization, removal, despawn and writing functions accept context to access additional information.
-- Move `despawn_recursive` into `replication_fns` module.
 
 ### Removed
 
@@ -74,13 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Channel creation methods in `RepliconChannels` now accept `RepliconChannel` with full channel configuration.
 - Make `default_max_bytes` field in `RepliconChannels` public.
 - Move `RepliconChannels::get_server_configs` and `RepliconChannels::get_client_configs` to create channels configs for `renet` into `RenetChannelsExt` extension trait provided by `bevy_replion_renet`. Make sure to import it to use these methods.
+- Move `ClientEntityMap` and `ClientMapping` to `client_entity_map` submodule.
 - Rename `ReplicationPlugins` into `RepliconPlugins`.
 - Rename `ClientCache` into `ConnectedClients`.
 - Rename `ClientState` into `ConnectedClient`.
 - Replace `RepliconChannels::set_client_max_bytes` and `RepliconChannels::set_server_max_bytes` with `RepliconChannels::server_channel_mut` and `RepliconChannels::client_channel_mut` respectively with more rich configuration.
 - Move `ClientEventChannel` to `client_event` module.
 - Move `ServerEventChannel` to `server_event` module.
-- `ClientMapper`, `ServerEntityMap`, `BufferedUpdates`, `ServerEntityTicks`, `ReplicationRules`, `ReplicationChannel`, `ClientEventChannel`, `ServerEventChannel`, `ServerEventQueue` and `EventMapper` are no longer in `prelude` module. Import them directly.
+- `ClientMapper`, `ServerEntityMap`, `BufferedUpdates`, `ReplicationRules`, `ReplicationChannel`, `ClientEventChannel`, `ServerEventChannel`, `ServerEventQueue` and `EventMapper` are no longer in `prelude` module. Import them directly.
 
 ## [0.23.0] - 2024-02-22
 
@@ -452,7 +456,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release after separation from [Project Harmonia](https://github.com/projectharmonia/project_harmonia).
 
-[unreleased]: https://github.com/projectharmonia/bevy_replicon/compare/v0.24.1...HEAD
+[unreleased]: https://github.com/projectharmonia/bevy_replicon/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.22.0...v0.23.0

@@ -1,10 +1,11 @@
+pub mod client_entity_map;
 pub mod connected_clients;
 pub(super) mod despawn_buffer;
 pub(super) mod removal_buffer;
 pub(super) mod replicated_archetypes;
 pub(super) mod replication_messages;
 pub mod replicon_server;
-pub mod replicon_tick;
+pub mod server_tick;
 
 use std::{io::Cursor, mem, time::Duration};
 
@@ -18,7 +19,6 @@ use bevy::{
     prelude::*,
     ptr::Ptr,
     time::common_conditions::on_timer,
-    utils::HashMap,
 };
 
 use crate::core::{
@@ -26,8 +26,10 @@ use crate::core::{
     replication_fns::{ctx::SerializeCtx, ReplicationFns},
     replication_rules::ReplicationRules,
     replicon_channels::{ReplicationChannel, RepliconChannels},
+    replicon_tick::RepliconTick,
     ClientId,
 };
+use client_entity_map::ClientEntityMap;
 use connected_clients::{
     client_visibility::Visibility, ClientBuffers, ConnectedClient, ConnectedClients,
 };
@@ -36,7 +38,7 @@ use removal_buffer::{RemovalBuffer, RemovalBufferPlugin};
 use replicated_archetypes::ReplicatedArchetypes;
 use replication_messages::ReplicationMessages;
 use replicon_server::RepliconServer;
-use replicon_tick::RepliconTick;
+use server_tick::ServerTick;
 
 pub struct ServerPlugin {
     /// Tick configuration.
@@ -65,7 +67,7 @@ impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((DespawnBufferPlugin, RemovalBufferPlugin))
             .init_resource::<RepliconServer>()
-            .init_resource::<RepliconTick>()
+            .init_resource::<ServerTick>()
             .init_resource::<ClientBuffers>()
             .init_resource::<ClientEntityMap>()
             .insert_resource(ConnectedClients::new(self.visibility_policy))
@@ -107,7 +109,7 @@ impl Plugin for ServerPlugin {
                         .map(Result::unwrap)
                         .in_set(ServerSet::Send)
                         .run_if(server_running)
-                        .run_if(resource_changed::<RepliconTick>),
+                        .run_if(resource_changed::<ServerTick>),
                     Self::reset.run_if(server_just_stopped),
                 ),
             );
@@ -142,9 +144,9 @@ impl ServerPlugin {
     }
 
     /// Increments current server tick which causes the server to replicate this frame.
-    pub fn increment_tick(mut replicon_tick: ResMut<RepliconTick>) {
-        replicon_tick.increment();
-        trace!("incremented {replicon_tick:?}");
+    pub fn increment_tick(mut server_tick: ResMut<ServerTick>) {
+        server_tick.increment();
+        trace!("incremented {server_tick:?}");
     }
 
     fn handle_connections(
@@ -222,7 +224,7 @@ impl ServerPlugin {
         )>,
         replication_fns: Res<ReplicationFns>,
         rules: Res<ReplicationRules>,
-        replicon_tick: Res<RepliconTick>,
+        server_tick: Res<ServerTick>,
         time: Res<Time>,
     ) -> bincode::Result<()> {
         replicated_archetypes.update(set.p0(), &rules);
@@ -239,14 +241,14 @@ impl ServerPlugin {
             &replication_fns,
             set.p0(),
             &change_tick,
-            *replicon_tick,
+            **server_tick,
         )?;
 
         let mut client_buffers = mem::take(&mut *set.p5());
         let connected_clients = messages.send(
             &mut set.p6(),
             &mut client_buffers,
-            *replicon_tick,
+            **server_tick,
             change_tick.this_run(),
             time.elapsed(),
         )?;
@@ -259,12 +261,12 @@ impl ServerPlugin {
     }
 
     fn reset(
-        mut replicon_tick: ResMut<RepliconTick>,
+        mut server_tick: ResMut<ServerTick>,
         mut entity_map: ResMut<ClientEntityMap>,
         mut connected_clients: ResMut<ConnectedClients>,
         mut client_buffers: ResMut<ClientBuffers>,
     ) {
-        *replicon_tick = Default::default();
+        *server_tick = Default::default();
         entity_map.0.clear();
         connected_clients.clear(&mut client_buffers);
     }
@@ -299,7 +301,7 @@ fn collect_changes(
     replication_fns: &ReplicationFns,
     world: &World,
     change_tick: &SystemChangeTick,
-    replicon_tick: RepliconTick,
+    server_tick: RepliconTick,
 ) -> bincode::Result<()> {
     for (init_message, _) in messages.iter_mut() {
         init_message.start_array();
@@ -358,7 +360,7 @@ fn collect_changes(
                 };
 
                 let (component_fns, rule_fns) = replication_fns.get(replicated_component.fns_id);
-                let ctx = SerializeCtx { replicon_tick };
+                let ctx = SerializeCtx { server_tick };
                 let mut shared_bytes = None;
                 for (init_message, update_message, client) in messages.iter_mut_with_clients() {
                     let visibility = client.visibility().cached_visibility();
@@ -589,91 +591,4 @@ pub enum VisibilityPolicy {
 pub enum ServerEvent {
     ClientConnected { client_id: ClientId },
     ClientDisconnected { client_id: ClientId, reason: String },
-}
-
-/**
-A resource that exists on the server for mapping server entities to
-entities that clients have already spawned. The mappings are sent to clients as part of replication
-and injected into the client's [`ServerEntityMap`](crate::client::server_entity_map::ServerEntityMap).
-
-Sometimes you don't want to wait for the server to spawn something before it appears on the
-client – when a client performs an action, they can immediately simulate it on the client,
-then match up that entity with the eventual replicated server spawn, rather than have replication spawn
-a brand new entity on the client.
-
-In this situation, the client can send the server its pre-spawned entity id, then the server can spawn its own entity
-and inject the [`ClientMapping`] into its [`ClientEntityMap`].
-
-Replication packets will send a list of such mappings to clients, which will
-be inserted into the client's [`ServerEntityMap`](crate::client::server_entity_map::ServerEntityMap). Using replication
-to propagate the mappings ensures any replication messages related to the pre-mapped
-server entities will synchronize with updating the client's [`ServerEntityMap`](crate::client::server_entity_map::ServerEntityMap).
-
-### Example:
-
-```
-use bevy::prelude::*;
-use bevy_replicon::prelude::*;
-
-#[derive(Event)]
-struct SpawnBullet(Entity);
-
-#[derive(Component)]
-struct Bullet;
-
-/// System that shoots a bullet and spawns it on the client.
-fn shoot_bullet(mut commands: Commands, mut bullet_events: EventWriter<SpawnBullet>) {
-    let entity = commands.spawn(Bullet).id();
-    bullet_events.send(SpawnBullet(entity));
-}
-
-/// Validation to check if client is not cheating or the simulation is correct.
-///
-/// Depending on the type of game you may want to correct the client or disconnect it.
-/// In this example we just always confirm the spawn.
-fn confirm_bullet(
-    mut commands: Commands,
-    mut bullet_events: EventReader<FromClient<SpawnBullet>>,
-    mut entity_map: ResMut<ClientEntityMap>,
-) {
-    for FromClient { client_id, event } in bullet_events.read() {
-        let server_entity = commands.spawn(Bullet).id(); // You can insert more components, they will be sent to the client's entity correctly.
-
-        entity_map.insert(
-            *client_id,
-            ClientMapping {
-                server_entity,
-                client_entity: event.0,
-            },
-        );
-    }
-}
-```
-
-If the client is connected and receives the replication data for the server entity mapping,
-replicated data will be applied to the client's original entity instead of spawning a new one.
-You can detect when the mapping is replicated by querying for [`Added<Replicated>`] on your original
-client entity.
-
-If client's original entity is not found, a new entity will be spawned on the client,
-just the same as when no client entity is provided.
-**/
-#[derive(Resource, Debug, Default, Deref)]
-pub struct ClientEntityMap(HashMap<ClientId, Vec<ClientMapping>>);
-
-impl ClientEntityMap {
-    /// Registers `mapping` for a client entity pre-spawned by the specified client.
-    ///
-    /// This will be sent as part of replication data and added to the client's
-    /// [`ServerEntityMap`](crate::client::server_entity_map::ServerEntityMap).
-    pub fn insert(&mut self, client_id: ClientId, mapping: ClientMapping) {
-        self.0.entry(client_id).or_default().push(mapping);
-    }
-}
-
-/// Stores the server entity corresponding to a client's pre-spawned entity.
-#[derive(Debug)]
-pub struct ClientMapping {
-    pub server_entity: Entity,
-    pub client_entity: Entity,
 }
